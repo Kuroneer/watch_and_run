@@ -17,8 +17,9 @@ HEED_GIT=1
 QUIET=
 REGEXs=()
 WRITE_ARGS=
+AT_LEAST_ONCE=1
 
-while getopts ":cKGqr:St:w" OPT; do
+while getopts ":cKGOqr:St:w" OPT; do
     case "${OPT}" in
         c)
             CLEAR_SCREEN=1
@@ -28,6 +29,9 @@ while getopts ":cKGqr:St:w" OPT; do
             ;;
         G)
             HEED_GIT=
+            ;;
+        O)
+            AT_LEAST_ONCE=
             ;;
         q)
             QUIET=" --quiet "
@@ -54,13 +58,13 @@ while getopts ":cKGqr:St:w" OPT; do
             ;;
         *)
             cat << USAGE >&2
-Usage: $(basename $0) [-S] [-c] [-K] [-G] [-q] [-t <throttle_time>] [-r <regex>] [-h] [--] [<dir>] <command>
-    Sets up inotify to watch for events in <dir> (or .) on files that match <regex> (or all
-    files) and runs <command>
+Usage: $(basename $0) [-S] [-c] [-K] [-G] [-O] [-q] [-t <throttle_time>] [-r <regex>] [-h] [--] [<dir>] <command>
+    Sets up inotify to watch for events in <dir> (or .) on files that match <regex> (or all files) and runs <command> every time such a file changes. The command is run at least once by default.
     -S: Do not use shell
     -c: Clear the screen
     -K: Do not kill spawned command
     -G: Do not heed git ('heed git' means using .gitignore and ignoring */.git/*)
+    -O: Do not run the command at first, wait only for events
     -q: Quiet
     -t <time>: Time to throttle command kill and restart
     -r <regex>: Listen for events that match this regex (you can provide several)
@@ -137,31 +141,33 @@ trap tidy SIGINT SIGTERM
 
 # Set up FD with inotifywait events
 INOTIFY_EVENTS='--event modify --event move --event create --event delete'
-exec 3<> <( inotifywait --monitor --recursive $QUIET $INOTIFY_EVENTS --format "%w%f" $DIR )
+exec 3<> <( [[ -n "$AT_LEAST_ONCE" ]] && echo ""; inotifywait --monitor --recursive $QUIET $INOTIFY_EVENTS --format "%w%f" $DIR )
 
 PID=
 while read -u 3 EVENT_PATH; do
-    if [[ -n "$HEED_GIT" ]] && command -v git > /dev/null; then
-        # Check git if not disabled
-        if [[ "$EVENT_PATH" =~ ^(.*/)?.git(/.*)?$ ]]; then
-            continue;
-        fi
-        if git check-ignore -q "$EVENT_PATH" 2>/dev/null; then
-            continue;
-        fi
-    fi
-
-    if [[ ${#REGEXs[@]} -ne 0 ]]; then
-        # Check regex if present
-        MATCH=
-        for REGEX in "${REGEXs[@]}"; do
-            if [[ "$EVENT_PATH" =~ $REGEX ]]; then
-                MATCH=1
-                break
+    if [[ -n "$EVENT_PATH" ]]; then
+        if [[ -n "$HEED_GIT" ]] && command -v git > /dev/null; then
+            # Check git if not disabled
+            if [[ "$EVENT_PATH" =~ ^(.*/)?.git(/.*)?$ ]]; then
+                continue;
             fi
-        done
-        if [[ -z "$MATCH" ]]; then
-            continue;
+            if git check-ignore -q "$EVENT_PATH" 2>/dev/null; then
+                continue;
+            fi
+        fi
+
+        if [[ ${#REGEXs[@]} -ne 0 ]]; then
+            # Check regex if present
+            MATCH=
+            for REGEX in "${REGEXs[@]}"; do
+                if [[ "$EVENT_PATH" =~ $REGEX ]]; then
+                    MATCH=1
+                    break
+                fi
+            done
+            if [[ -z "$MATCH" ]]; then
+                continue;
+            fi
         fi
     fi
 
