@@ -146,7 +146,7 @@ while read -u 3 EVENT_PATH; do
         if [[ "$EVENT_PATH" =~ ^(.*/)?.git(/.*)?$ ]]; then
             continue;
         fi
-        if git check-ignore -q $EVENT_PATH 2>/dev/null; then
+        if git check-ignore -q "$EVENT_PATH" 2>/dev/null; then
             continue;
         fi
     fi
