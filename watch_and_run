@@ -1,0 +1,199 @@
+#! /usr/bin/env bash
+
+#   Script to watch the filesystem and run a command when some file changes.
+#   Provides options to heed .gitignore, filepath regex validation...
+#
+#   Author: Jose Maria Perez Ramos <jose.m.perez.ramos+git gmail>
+#   Date: 2018.09.05
+#   Version: 1.0.0
+#   This code is public-domain
+
+
+KILLABLE=1
+CLEAR_SCREEN=
+THROTTLE_S=5
+WITH_SHELL=1
+HEED_GIT=1
+QUIET=
+REGEXs=()
+WRITE_ARGS=
+
+while getopts ":cKGqr:St:w" OPT; do
+    case "${OPT}" in
+        c)
+            CLEAR_SCREEN=1
+            ;;
+        K)
+            KILLABLE=
+            ;;
+        G)
+            HEED_GIT=
+            ;;
+        q)
+            QUIET=" --quiet "
+            ;;
+        r)
+            REGEXs+=( ${OPTARG} )
+            ;;
+        S)
+            WITH_SHELL=
+            ;;
+        t)
+            if [[ ${OPTARG} =~ ^[0-9]+$ ]] ; then
+                THROTTLE_S=${OPTARG}
+            else
+                echo "WARNING: ${OPT}: ${OPTARG} Not a number" >&2
+            fi
+            ;;
+        w)
+            WRITE_ARGS="$(for ARG in "$@"; do
+                if [[ "$ARG" != "-w" ]]; then
+                    printf ' "%s"' "$(sed -e 's/"/\\"/g' <<< $ARG)"
+                fi
+            done)"
+            ;;
+        *)
+            cat << USAGE >&2
+Usage: $(basename $0) [-S] [-c] [-K] [-G] [-q] [-t <throttle_time>] [-r <regex>] [-h] [--] [<dir>] <command>
+    Sets up inotify to watch for events in <dir> (or .) on files that match <regex> (or all
+    files) and runs <command>
+    -S: Do not use shell
+    -c: Clear the screen
+    -K: Do not kill spawned command
+    -G: Do not heed git ('heed git' means using .gitignore and ignoring */.git/*)
+    -q: Quiet
+    -t <time>: Time to throttle command kill and restart
+    -r <regex>: Listen for events that match this regex (you can provide several)
+    -w: Write config file to be able to run the whole command just with $(basename $0)
+    -h: Show this help
+USAGE
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND-1))
+
+DIR=.
+if [[ -d "${1}" ]]; then
+    DIR="${1}"
+    shift
+fi
+
+COMMAND="$1"
+shift
+
+CONF_FILE_NAME=".$(basename $0).conf"
+if [[ -z "$COMMAND" ]]; then
+    if [[ -f "$CONF_FILE_NAME" ]]; then
+        eval "exec $0 $(cat "$CONF_FILE_NAME")"
+    fi
+
+    echo "ERROR: Command not found" >&2
+    exit 2;
+fi
+if [[ -n "$WRITE_ARGS" ]]; then
+    echo "$WRITE_ARGS" > "$CONF_FILE_NAME"
+    echo "$CONF_FILE_NAME written" >&2
+fi
+
+if [[ -n "$WITH_SHELL" ]]; then
+    ARGS=
+    # Ugly as hell, I know, but I need to escape it manually
+    for ARG in "$@"; do
+        ARGS=$(printf '%s "%s"' "$ARGS" "$(sed -e 's/"/\\"/g' <<< $ARG)")
+    done
+fi
+
+## Report what's going to be done
+if [[ -z "$QUIET" ]]; then
+    if [[ -n "$WITH_SHELL" ]]; then
+        echo "Running <$COMMAND> with $SHELL every time a file on <$DIR> changes" >&2
+    else
+        echo "Running <$COMMAND> every time a file on <$DIR> changes" >&2
+    fi
+    if [[ ${#REGEXs[@]} -ne 0 ]]; then
+        echo "File path must match any of <${REGEXs[@]}>" >&2
+    fi
+    echo "At most run once each ${THROTTLE_S}s" >&2
+    if [[ -n "$KILLABLE" ]]; then
+        echo "Running program will be killed if it's still running when command is triggered" >&2
+    fi
+    if [[ -n "$CLEAR_SCREEN" ]]; then
+        echo "Screen will be cleared each time" >&2
+    fi
+    echo "Setting inotify..."
+fi
+
+
+##############################################
+# Configuration complete, now the fun part...
+
+tidy () {
+    trap - SIGINT SIGTERM
+    kill -- -$$
+    stty sane
+}
+trap tidy SIGINT SIGTERM
+
+# Set up FD with inotifywait events
+INOTIFY_EVENTS='--event modify --event move --event create --event delete'
+exec 3<> <( inotifywait --monitor --recursive $QUIET $INOTIFY_EVENTS --format "%w%f" $DIR )
+
+PID=
+while read -u 3 EVENT_PATH; do
+    if [[ -n "$HEED_GIT" ]] && command -v git > /dev/null; then
+        # Check git if not disabled
+        if [[ "$EVENT_PATH" =~ ^(.*/)?.git(/.*)?$ ]]; then
+            continue;
+        fi
+        if git check-ignore -q $EVENT_PATH 2>/dev/null; then
+            continue;
+        fi
+    fi
+
+    if [[ ${#REGEXs[@]} -ne 0 ]]; then
+        # Check regex if present
+        MATCH=
+        for REGEX in "${REGEXs[@]}"; do
+            if [[ "$EVENT_PATH" =~ $REGEX ]]; then
+                MATCH=1
+                break
+            fi
+        done
+        if [[ -z "$MATCH" ]]; then
+            continue;
+        fi
+    fi
+
+    # If command is started and we are allowed to kill it, do it
+    if [[ -n "$PID" ]]; then
+        if [[ -n "$KILLABLE" ]]; then
+            kill $PID 2>/dev/null
+        fi
+
+        wait $PID
+        stty sane
+    fi
+
+    # "Clear" stdin
+    while read -r -t 0 -u 3; do
+        read -r -u 3;
+    done
+
+    if [[ -n "$CLEAR_SCREEN" ]]; then
+        clear
+    fi
+    date
+    # Run the command
+    if [[ -n "$WITH_SHELL" ]]; then
+        $SHELL "-c" "$COMMAND $ARGS" <&1 &
+    else
+        $COMMAND "$@" <&1 &
+    fi
+    PID=$!
+    disown 2>/dev/null
+
+    # Throttle
+    sleep $THROTTLE_S
+done
+
