@@ -18,8 +18,9 @@ QUIET=
 REGEXs=()
 WRITE_ARGS=
 AT_LEAST_ONCE=1
+MARK=
 
-while getopts ":cKGOqr:St:w" OPT; do
+while getopts ":cKGOm:qr:St:w" OPT; do
     case "${OPT}" in
         c)
             CLEAR_SCREEN=1
@@ -29,6 +30,9 @@ while getopts ":cKGOqr:St:w" OPT; do
             ;;
         G)
             HEED_GIT=
+            ;;
+        m)
+            MARK=${OPTARG}
             ;;
         O)
             AT_LEAST_ONCE=
@@ -58,7 +62,7 @@ while getopts ":cKGOqr:St:w" OPT; do
             ;;
         *)
             cat << USAGE >&2
-Usage: $(basename $0) [-S] [-c] [-K] [-G] [-O] [-q] [-t <throttle_time>] [-r <regex>] [-h] [--] [<dir>] <command>
+Usage: $(basename $0) [-S] [-c] [-K] [-G] [-O] [-q] [-t <throttle_time>] [-r <regex>] [-m <mark>] [-h] [--] [<dir>] <command>
     Sets up inotify to watch for events in <dir> (or .) on files that match <regex> (or all files) and runs <command> every time such a file changes. The command is run at least once by default.
     -S: Do not use shell
     -c: Clear the screen
@@ -68,6 +72,7 @@ Usage: $(basename $0) [-S] [-c] [-K] [-G] [-O] [-q] [-t <throttle_time>] [-r <re
     -q: Quiet
     -t <time>: Time to throttle command kill and restart
     -r <regex>: Listen for events that match this regex (you can provide several)
+    -m <mark>: Print mark before each command execution
     -w: Write config file to be able to run the whole command just with $(basename $0)
     -h: Show this help
 USAGE
@@ -188,6 +193,9 @@ while read -u 3 EVENT_PATH; do
 
     if [[ -n "$CLEAR_SCREEN" ]]; then
         clear
+    fi
+    if [[ -n "$MARK" ]]; then
+        echo "$MARK"
     fi
     date
     # Run the command
