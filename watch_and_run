@@ -140,7 +140,7 @@ fi
 tidy () {
     trap - SIGINT SIGTERM
     kill -- -$$
-    stty sane
+    stty sane 2>/dev/null
 }
 trap tidy SIGINT SIGTERM
 
@@ -183,7 +183,7 @@ while read -u 3 EVENT_PATH; do
         fi
 
         wait $PID
-        stty sane
+        stty sane 2>/dev/null
     fi
 
     # "Clear" stdin
