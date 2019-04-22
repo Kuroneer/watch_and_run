@@ -19,8 +19,9 @@ REGEXs=()
 WRITE_ARGS=
 AT_LEAST_ONCE=1
 MARK=
+VERBOSE=
 
-while getopts ":cKGOm:qr:St:w" OPT; do
+while getopts ":cKGOm:qr:St:vw" OPT; do
     case "${OPT}" in
         c)
             CLEAR_SCREEN=1
@@ -53,6 +54,9 @@ while getopts ":cKGOm:qr:St:w" OPT; do
                 echo "WARNING: ${OPT}: ${OPTARG} Not a number" >&2
             fi
             ;;
+        v)
+            VERBOSE=1
+            ;;
         w)
             WRITE_ARGS="$(for ARG in "$@"; do
                 if [[ "$ARG" != "-w" ]]; then
@@ -73,6 +77,7 @@ Usage: $(basename $0) [-S] [-c] [-K] [-G] [-O] [-q] [-t <throttle_time>] [-r <re
     -t <time>: Time to throttle command kill and restart
     -r <regex>: Listen for events that match this regex (you can provide several)
     -m <mark>: Print mark before each command execution
+    -v: Show the path that triggered the command
     -w: Write config file to be able to run the whole command just with $(basename $0)
     -h: Show this help
 USAGE
@@ -197,6 +202,9 @@ while read -u 3 EVENT_PATH; do
     if [[ -n "$MARK" ]]; then
         echo "$MARK"
     fi
+
+    [[ -n "$EVENT_PATH" && -n "$VERBOSE" ]] && echo "Triggered by $EVENT_PATH"
+
     date
     # Run the command
     if [[ -n "$WITH_SHELL" ]]; then
