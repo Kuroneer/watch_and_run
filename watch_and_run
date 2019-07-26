@@ -9,34 +9,43 @@
 #   This code is public-domain
 
 
-KILLABLE=1
 CLEAR_SCREEN=
 THROTTLE_S=5
 WITH_SHELL=1
 HEED_GIT=1
 QUIET=
 REGEXs=()
+IGNORE_REGEXs=()
 WRITE_ARGS=
 AT_LEAST_ONCE=1
 MARK=
 VERBOSE=
+KILL_SIGNAL=TERM
+CLEAN_UP_COMMAND=
+USE_PROCESS_GROUPS=
 
-while getopts ":cKGOm:qr:St:vw" OPT; do
+while getopts ":ck:Gi:Om:pqr:St:u:vw" OPT; do
     case "${OPT}" in
         c)
             CLEAR_SCREEN=1
             ;;
-        K)
-            KILLABLE=
+        k)
+            KILL_SIGNAL=${OPTARG}
             ;;
         G)
             HEED_GIT=
+            ;;
+        i)
+            IGNORE_REGEXs+=( ${OPTARG} )
             ;;
         m)
             MARK=${OPTARG}
             ;;
         O)
             AT_LEAST_ONCE=
+            ;;
+        p)
+            USE_PROCESS_GROUPS=1
             ;;
         q)
             QUIET=" --quiet "
@@ -54,6 +63,10 @@ while getopts ":cKGOm:qr:St:vw" OPT; do
                 echo "WARNING: ${OPT}: ${OPTARG} Not a number" >&2
             fi
             ;;
+        u)
+            CLEAN_UP_COMMAND=${OPTARG}
+            ;;
+
         v)
             VERBOSE=1
             ;;
@@ -70,13 +83,16 @@ Usage: $(basename $0) [-S] [-c] [-K] [-G] [-O] [-q] [-t <throttle_time>] [-r <re
     Sets up inotify to watch for events in <dir> (or .) on files that match <regex> (or all files) and runs <command> every time such a file changes. The command is run at least once by default.
     -S: Do not use shell
     -c: Clear the screen
-    -K: Do not kill spawned command
+    -k <signal>: Signal to send when killing the spawned command (default is TERM, set to "" to disable)
     -G: Do not heed git ('heed git' means using .gitignore and ignoring */.git/*)
+    -i <regex>: Ignore changes to files matching these regex (applied last, you can provide several)
     -O: Do not run the command at first, wait only for events
+    -p: Start (and kill) whole process groups
     -q: Quiet
     -t <time>: Time to throttle command kill and restart
     -r <regex>: Listen for events that match this regex (you can provide several)
     -m <mark>: Print mark before each command execution
+    -u <command>: Clean-up command
     -v: Show the path that triggered the command
     -w: Write config file to be able to run the whole command just with $(basename $0)
     -h: Show this help
@@ -129,8 +145,8 @@ if [[ -z "$QUIET" ]]; then
         echo "File path must match any of <${REGEXs[@]}>" >&2
     fi
     echo "At most run once each ${THROTTLE_S}s" >&2
-    if [[ -n "$KILLABLE" ]]; then
-        echo "Running program will be killed if it's still running when command is triggered" >&2
+    if [[ -n "$KILL_SIGNAL" ]]; then
+        echo "Running program will be sent the $KILL_SIGNAL signal if it's still running when command is triggered" >&2
     fi
     if [[ -n "$CLEAR_SCREEN" ]]; then
         echo "Screen will be cleared each time" >&2
@@ -138,12 +154,28 @@ if [[ -z "$QUIET" ]]; then
     echo "Setting inotify..."
 fi
 
+START_PROCESS_GROUP=
+if [[ -n "$USE_PROCESS_GROUPS" ]]; then
+    START_PROCESS_GROUP=setsid
+fi
+KILL_PROCESS_GROUP=
+if [[ -n "$USE_PROCESS_GROUPS" ]]; then
+    KILL_PROCESS_GROUP=-
+fi
+
 
 ##############################################
 # Configuration complete, now the fun part...
+PID=
 
 tidy () {
     trap - SIGINT SIGTERM
+    if [[ -n "$KILL_SIGNAL" ]]; then
+        kill -$KILL_SIGNAL -- ${KILL_PROCESS_GROUP}$PID 2>/dev/null
+    fi
+    if [[ -n "$CLEAN_UP_COMMAND" ]]; then
+        $CLEAN_UP_COMMAND
+    fi
     kill -- -$$
     stty sane 2>/dev/null
 }
@@ -153,19 +185,8 @@ trap tidy SIGINT SIGTERM
 INOTIFY_EVENTS='--event modify --event move --event create --event delete'
 exec 3<> <( [[ -n "$AT_LEAST_ONCE" ]] && echo ""; inotifywait --monitor --recursive $QUIET $INOTIFY_EVENTS --format "%w%f" $DIR )
 
-PID=
 while read -u 3 EVENT_PATH; do
     if [[ -n "$EVENT_PATH" ]]; then
-        if [[ -n "$HEED_GIT" ]] && command -v git > /dev/null; then
-            # Check git if not disabled
-            if [[ "$EVENT_PATH" =~ ^(.*/)?.git(/.*)?$ ]]; then
-                continue;
-            fi
-            if git check-ignore -q "$EVENT_PATH" 2>/dev/null; then
-                continue;
-            fi
-        fi
-
         if [[ ${#REGEXs[@]} -ne 0 ]]; then
             # Check regex if present
             MATCH=
@@ -179,14 +200,40 @@ while read -u 3 EVENT_PATH; do
                 continue;
             fi
         fi
+
+        if [[ -n "$HEED_GIT" ]] && command -v git > /dev/null; then
+            # Check git if not disabled
+            if [[ "$EVENT_PATH" =~ ^(.*/)?.git(/.*)?$ ]]; then
+                continue;
+            fi
+            if git check-ignore -q "$EVENT_PATH" 2>/dev/null; then
+                continue;
+            fi
+        fi
+
+        if [[ ${#IGNORE_REGEXs[@]} -ne 0 ]]; then
+            MATCH=
+            for REGEX in "${IGNORE_REGEXs[@]}"; do
+                if [[ "$EVENT_PATH" =~ $REGEX ]]; then
+                    MATCH=1
+                    break
+                fi
+            done
+            if [[ -n "$MATCH" ]]; then
+                continue;
+            fi
+        fi
     fi
 
     # If command is started and we are allowed to kill it, do it
     if [[ -n "$PID" ]]; then
-        if [[ -n "$KILLABLE" ]]; then
-            kill $PID 2>/dev/null
+        if [[ -n "$KILL_SIGNAL" ]]; then
+            kill -$KILL_SIGNAL -- ${KILL_PROCESS_GROUP}$PID 2>/dev/null
         fi
 
+        if [[ -n "$CLEAN_UP_COMMAND" ]]; then
+            $CLEAN_UP_COMMAND
+        fi
         wait $PID
         stty sane 2>/dev/null
     fi
@@ -208,9 +255,9 @@ while read -u 3 EVENT_PATH; do
     date
     # Run the command
     if [[ -n "$WITH_SHELL" ]]; then
-        $SHELL "-c" "$COMMAND $ARGS" <&1 &
+        $START_PROCESS_GROUP $SHELL "-c" "$COMMAND $ARGS" <&1 &
     else
-        $COMMAND "$@" <&1 &
+        $START_PROCESS_GROUP $COMMAND "$@" <&1 &
     fi
     PID=$!
     disown 2>/dev/null
