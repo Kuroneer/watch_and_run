@@ -240,7 +240,10 @@ while read -u 3 EVENT_PATH; do
 
     # "Clear" stdin
     while read -r -t 0 -u 3; do
-        read -r -u 3;
+        if ! read -r -u 3; then
+            # Read -t 0 may report that the fd is able to read
+            break
+        fi
     done
 
     if [[ -n "$CLEAR_SCREEN" ]]; then
