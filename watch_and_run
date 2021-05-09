@@ -176,14 +176,14 @@ tidy () {
     if [[ -n "$CLEAN_UP_COMMAND" ]]; then
         $CLEAN_UP_COMMAND
     fi
-    kill -- -$$
     stty sane 2>/dev/null
+    exit
 }
 trap tidy SIGINT SIGTERM
 
 # Set up FD with inotifywait events
 INOTIFY_EVENTS='--event modify --event move --event create --event delete'
-exec 3<> <( [[ -n "$AT_LEAST_ONCE" ]] && echo ""; inotifywait --monitor --recursive $QUIET $INOTIFY_EVENTS --format "%w%f" $DIR )
+exec 3< <( [[ -n "$AT_LEAST_ONCE" ]] && echo ""; inotifywait --monitor --recursive $QUIET $INOTIFY_EVENTS --format "%w%f" $DIR )
 
 while read -u 3 EVENT_PATH; do
     if [[ -n "$EVENT_PATH" ]]; then
@@ -258,12 +258,11 @@ while read -u 3 EVENT_PATH; do
     date
     # Run the command
     if [[ -n "$WITH_SHELL" ]]; then
-        $START_PROCESS_GROUP $SHELL "-c" "$COMMAND $ARGS" <&1 &
+        $START_PROCESS_GROUP $SHELL "-c" "$COMMAND $ARGS" <&0 &
     else
-        $START_PROCESS_GROUP $COMMAND "$@" <&1 &
+        $START_PROCESS_GROUP $COMMAND "$@" <&0 &
     fi
     PID=$!
-    disown 2>/dev/null
 
     # Throttle
     sleep $THROTTLE_S
